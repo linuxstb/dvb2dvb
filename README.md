@@ -70,7 +70,7 @@ Usage
 The target bitrate is currently hardcoded near the top of dvb2dvb.c as
 follows:
 
-#define TARGET_BITRATE 31668318
+`#define TARGET_BITRATE 31668318`
 
 This must be the bitrate output by your version of sendts (which
 outputs the target bitrate based on the DVB-T parameters).  31668318
