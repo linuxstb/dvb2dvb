@@ -49,7 +49,7 @@ int rb_read(struct ringbuffer_t *rb, uint8_t* buf, int count)
       /* Two-part copy */
       int n1 = sizeof(rb->buf) - (rb->head - rb->buf);
       memcpy(buf,rb->head,n1);
-      memcpy(buf,rb->buf,count-n1);
+      memcpy(buf+n1,rb->buf,count-n1);
       rb->head = rb->buf + count - n1;
     } else {
       /* Single copy */
