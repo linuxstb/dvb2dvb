@@ -7,6 +7,7 @@
 int process_pat(struct service_t* sv, uint8_t* buf);
 int process_sdt(struct service_t* sv);
 int bcd2dec(unsigned char buf);
+char* pts2hmsu(uint64_t pts,char sep);
 int process_pmt(struct service_t* sv);
 void process_section(struct section_t* next, struct section_t* curr, uint8_t* buf, int table_id);
 

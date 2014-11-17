@@ -42,7 +42,7 @@ static char pts_text[30];
 char* pts2hmsu(uint64_t pts,char sep) {
   int h,m,s,u;
 
-  pts/=90; // Convert to milliseconds
+  pts/=90*300; // Convert to milliseconds
   h=(pts/(1000*60*60));
   m=(pts/(1000*60))-(h*60);
   s=(pts/1000)-(h*3600)-(m*60);
