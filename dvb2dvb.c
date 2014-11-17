@@ -82,11 +82,55 @@ void dump_service(struct service_t* services, int i)
   fprintf(stderr,"  lcn: %d\n",services[i].lcn);
 }
 
+void check_cc(char *msg, int service, uint8_t *my_cc, uint8_t *buf)
+{
+  if (buf[0] != 0x47) {
+    fprintf(stderr,"%s: Service %d, NO SYNC BYTE: 0x%02x 0x%02x 0x%02x 0x%02x\n",msg,service,buf[0],buf[1],buf[2],buf[3]);
+    return;
+  }
+
+  int pid = (((buf[1] & 0x1f) << 8) | buf[2]);
+  int discontinuity_indicator=(buf[5]&0x80)>>7;
+  int adaption_field_control=(buf[3]&0x30)>>4;
+  if (my_cc[pid]==0xff) {
+    my_cc[pid]=buf[3]&0x0f;
+  } else {
+    if ((adaption_field_control!=0) && (adaption_field_control!=2)) {
+      my_cc[pid]++; my_cc[pid]%=16;
+    }
+  }
+
+  if ((discontinuity_indicator==0) && (my_cc[pid]!=(buf[3]&0x0f))) {
+    fprintf(stderr,"%s: Service %d, PID %d - packet incontinuity - expected %02x, found %02x\n",msg,service,pid,my_cc[pid],buf[3]&0x0f);
+    my_cc[pid]=buf[3]&0x0f;
+  }
+}
+
+
 static size_t
 curl_callback(void *contents, size_t size, size_t nmemb, void *userp)
 {
   struct service_t* sv = userp;
   int count = size*nmemb;
+
+  // Check input stream for CC errors
+  int needed = 188 - sv->curl_bytes;
+  int bytes_left = count;
+  //  fprintf(stderr,"Processing %d bytes, needed=%d\n",count,needed);
+  uint8_t *p = contents;
+  while (bytes_left >= needed) {
+    memcpy(&sv->curl_buf[sv->curl_bytes],p,needed);
+    bytes_left -= needed;
+    sv->curl_bytes = 0;
+    p += needed;
+    check_cc("curl",sv->id, &sv->curl_cc[0], &sv->curl_buf[0]);
+    needed = 188;
+  }
+  if (bytes_left) {
+    sv->curl_bytes = bytes_left;
+    memcpy(&sv->curl_buf[0],p,sv->curl_bytes);
+  }
+  //  fprintf(stderr,"End of processing, %d bytes, byte_left=%d\n",count,bytes_left);
 
   int n = rb_write(&sv->inbuf, contents, count);
 
@@ -128,19 +172,10 @@ int init_service(struct service_t* sv)
   int pid;
   int i = 0;
 
-  int error = pthread_create(&sv->curl_threadid,
-                             NULL, /* default attributes please */
-                             curl_thread,
-                             (void *)sv);
-
-  if (error)
-    fprintf(stderr, "Couldn't run thread number %d, errno %d\n", i, error);
-  else
-    fprintf(stderr, "Thread %d, gets %s\n", i, sv->url);
-
   // First find the PAT, to identify the service_id and pmt_pid
   while(1) {
     n = rb_read(&sv->inbuf,buf,188);
+    check_cc("rb_read0",sv->id, &sv->my_cc[0], buf);
     (void)n;
     i++;
     pid = (((buf[1] & 0x1f) << 8) | buf[2]);
@@ -157,6 +192,7 @@ int init_service(struct service_t* sv)
   //  SDT: 
   while((!sv->pmt.length) || (!sv->sdt.length)) {
     n = rb_read(&sv->inbuf,buf,188);
+    check_cc("rb_read1",sv->id, &sv->my_cc[0], buf);
     i++;
     pid = (((buf[1] & 0x1f) << 8) | buf[2]);
     if (pid==sv->pmt_pid) {
@@ -191,6 +227,7 @@ void read_to_next_pcr(struct service_t* sv)
 
   while (!found) {
     int n = rb_read(&sv->inbuf,buf,188);
+    check_cc("rb_read2",sv->id, &sv->my_cc[0], buf);
     (void)n;
     int pid = (((buf[1] & 0x1f) << 8) | buf[2]);
     if (pid==sv->pcr_pid) {
@@ -203,6 +240,11 @@ void read_to_next_pcr(struct service_t* sv)
         sv->second_pcr |= ((uint64_t)buf[10] >> 7) & 0x01;
         sv->second_pcr *= 300;
         sv->second_pcr += ((buf[10] & 0x01) << 8) | buf[11];
+
+        if (sv->second_pcr < sv->first_pcr) {
+          fprintf(stderr,"WARNING: PCR wraparound - first_pcr=%s",pts2hmsu(sv->first_pcr,'.'));
+          fprintf(stderr,", second_pcr=%s",pts2hmsu(sv->second_pcr,'.'));
+        }
         found = 1;
       }
     }
@@ -233,14 +275,14 @@ void read_to_next_pcr(struct service_t* sv)
 
 void sync_to_pcr(struct service_t* sv)
 {
-  int i,n;
+  int n;
   int pid;
   uint8_t buf[188];
 
   while (1) {
     n = rb_read(&sv->inbuf,buf,188);
+    check_cc("rb_read3",sv->id, &sv->my_cc[0], buf);
     (void)n;
-    i++;
     pid = (((buf[1] & 0x1f) << 8) | buf[2]);
     if (pid==sv->pmt_pid) {
       process_section(&sv->next_pmt,&sv->pmt,buf,0x02);
@@ -257,7 +299,7 @@ void sync_to_pcr(struct service_t* sv)
         sv->start_pcr *= 300;
         sv->start_pcr += ((buf[10] & 0x01) << 8) | buf[11];
         sv->second_pcr = sv->start_pcr;
-        //fprintf(stderr,"pid=%d, pcr=%lld (%s), packets=%d\n",pid,sv->start_pcr,pts2hmsu(sv->start_pcr,'.'),i);
+        fprintf(stderr,"Service %d, pid=%d, start_pcr=%lld (%s)\n",sv->id,pid,sv->start_pcr,pts2hmsu(sv->start_pcr,'.'));
         memcpy(&sv->buf,buf,188);
         sv->packets_in_buf = 1;
         return;
@@ -293,7 +335,23 @@ int main(int argc, char* argv[])
     services[i].new_pmt_pid = (i+1)*100;
     services[i].new_service_id = service_id++;
     services[i].lcn = lcn++;
+    for (j=0;j<8192;j++) { services[i].my_cc[j] = 0xff; }
+    for (j=0;j<8192;j++) { services[i].curl_cc[j] = 0xff; }
 
+
+    fprintf(stderr,"Creaeting thread %d\n",i);
+    int error = pthread_create(&services[i].curl_threadid,
+                               NULL, /* default attributes please */
+                               curl_thread,
+                               (void *)&services[i]);
+
+    if (error)
+      fprintf(stderr, "Couldn't run thread number %d, errno %d\n", i, error);
+    else
+      fprintf(stderr, "Thread %d, gets %s\n", i, services[i].url);
+  }
+
+  for (i=0;i<nservices;i++) {
     int res = init_service(&services[i]);
     if (res < 0) {
       fprintf(stderr,"Error opening service %d (%s), aborting\n",i,services[i].url);
@@ -315,6 +373,8 @@ int main(int argc, char* argv[])
     int to_skip = (rb_get_bytes_used(&services[i].inbuf)/188) * 188;
     rb_skip(&services[i].inbuf, to_skip);
     fprintf(stderr,"Skipped %d bytes from service %d\n",to_skip,i);
+    // Reset CC counters
+    for (j=0;j<8192;j++) { services[i].my_cc[j] = 0xff; }
   }
 
   for (i=0;i<nservices;i++) {
@@ -402,7 +462,7 @@ int main(int argc, char* argv[])
     }
 
     /* Now output whichever packet is next */
-    int n;
+    int n,res;
     uint8_t* buf;
     int pid;
     switch (next_psi) {
@@ -413,7 +473,8 @@ int main(int argc, char* argv[])
           buf[3] = 0x10 | eit_cc;
           eit_cc = (eit_cc + 1) % 16;
         }
-        write(1, &sv->buf[188*sv->packets_written], 188);
+        res = write(1, &sv->buf[188*sv->packets_written], 188);
+        if (res != 188) { fprintf(stderr,"Write error - res=%d\n",res); }
         n = 1;
         sv->packets_written++;
         break;

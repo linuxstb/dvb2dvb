@@ -75,8 +75,13 @@ struct service_t
   int64_t second_pcr;
   int packets_in_buf;
   int packets_written;
+  uint8_t my_cc[8192];
   uint8_t buf[INPUT_BUFFER_SIZE_IN_PACKETS*188];
   int64_t bitpos[INPUT_BUFFER_SIZE_IN_PACKETS];
+
+  uint8_t curl_cc[8192];
+  uint8_t curl_buf[188];
+  int curl_bytes;
 
   struct section_t pmt;
   struct section_t sdt;
