@@ -466,6 +466,17 @@ void create_pmt(struct service_t* sv)
     j += 5 + ES_info_length;
   }
 
+  /* hbbtv - insert reference to AIT stream */
+  if (sv->ait_pid) {
+    pmt[i++] = 0x05;
+    put_u16be(pmt+i, 0xe000 | sv->ait_pid); i += 2;
+    put_u16be(pmt+i, 0xf000 | 5); i += 2;
+    pmt[i++] = 0x6f;  // application_signalling_descriptor
+    pmt[i++] = 3; // length
+    put_u16be(pmt+i, 0x8000 | sv->hbbtv.application_type); i += 2;
+    pmt[i++] = sv->hbbtv.AIT_version_number;
+  }
+
   int section_length = i - 3 + 4;
   put_u16be(pmt+1, 0xb000 | section_length);
 
@@ -505,6 +516,86 @@ void create_pat(struct section_t *patsec, struct service_t *services, int nservi
   put_u32be(pat+i, crc);
 
   patsec->length = i + 4;
+}
+
+void create_ait(struct service_t* sv)
+{
+  uint8_t *ait = &sv->ait.buf[0];
+  int i,j,k;
+  int current_next_indicator = 1;
+
+  memset(ait,0,sizeof(sv->ait.buf));
+
+  ait[0] = 0x74; // table_id
+  // skip section_length - 2 bytes
+  put_u16be(ait+3,sv->hbbtv.application_type);
+  ait[5] = 0xc0 | (sv->hbbtv.AIT_version_number << 1) | current_next_indicator;
+  ait[6] = 0x00;  // section_number
+  ait[7] = 0x00;  // last_section_number
+  
+  // Common descriptors (empty)
+  ait[8] = 0xf0;
+  ait[9] = 0;
+
+  // Application loop
+  i = 12;
+  j = i;
+
+  put_u32be(ait+i, 0x13); i += 4;  // organisation_id
+  put_u16be(ait+i, 0x0001) ; i += 2;  // application_id = 1 (unsigned application)
+  ait[i++] = 0x01;  // application_control_code = autostart application
+  i += 2; // descriptors loop length
+  k = i;
+  // application descriptors
+
+  // 1) transport protocol descriptor
+  int url_len = strlen(sv->hbbtv.url);
+  ait[i++] = 2; // transport_protocol_descriptor
+  ait[i++] = url_len + 5; // descriptor_length
+  put_u16be(ait+i, 0x0003); i += 2; // protocol_id = Transport via HTTP over the interaction channel 
+  ait[i++] = 0; // tranport_protocol_label
+  ait[i++] = url_len;
+  memcpy(ait+i, sv->hbbtv.url, url_len); i += url_len;
+  ait[i++] = 0;
+
+  // 2) application_descriptor  
+  ait[i++] = 0; // application_descriptor
+  ait[i++] = 9;
+  ait[i++] = 5; // application_profiles_length
+  put_u16be(ait+i, 0x0001); i += 2;
+  ait[i++] = 0x00;
+  ait[i++] = 0x05;
+  ait[i++] = 0x00;
+  ait[i++] = (0 << 7) | (0x3 << 5) | 0x1f;
+  ait[i++] = 2; // application_priority
+  ait[i++] = 0; // transport_protocol_label
+
+  // 3) application_name_descriptor
+  char* application_name = "hbbtv application";
+  int name_len = strlen(application_name);
+  ait[i++] = 0x01; // application_name_descriptor
+  ait[i++] = name_len + 4;
+  memcpy(ait+i,"eng",3); i += 3;
+  ait[i++] = name_len;
+  memcpy(ait+i,application_name,name_len); i += name_len;
+
+  // 4) simple_application_location_descriptor
+  int path_len = strlen(sv->hbbtv.initial_path);
+  ait[i++] = 0x15; // simple_application_location_descriptor
+  ait[i++] = path_len;
+  memcpy(ait+i,sv->hbbtv.initial_path,path_len); i += path_len;
+  
+  put_u16be(ait+k-2,0xf000 | (i-k));  // descriptors loop length
+  put_u16be(ait+j-2,0xf000 | (i-j));  // length of application 
+
+  int section_length = i - 3 + 4;
+  put_u16be(ait+1, 0xf000 | section_length);
+
+  uint32_t crc = psi_crc32(ait, i, 0xffffffff);
+
+  put_u32be(ait+i, crc);
+
+  sv->ait.length = i + 4;
 }
 
 int copy_section(uint8_t* tsbuf, struct section_t* section, int pid)

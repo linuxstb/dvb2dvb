@@ -218,6 +218,10 @@ int process_pmt(struct service_t* sv)
     sv->pid_map[sv->pcr_pid] = new_pid++;
   }
 
+  if (sv->hbbtv.url) {
+    sv->ait_pid = new_pid;
+  }
+
   return 0;
 }
 

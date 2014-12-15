@@ -17,6 +17,7 @@ int copy_sdt_descriptors(uint8_t *dst, uint8_t *src, int len, int onid);
 void create_nit(struct section_t* nitsec, struct service_t* services, int nservices);
 void create_sdt(struct section_t* sdtsec, struct service_t* services, int nservices);
 void create_pmt(struct service_t* sv);
+void create_ait(struct service_t* sv);
 void create_pat(struct section_t *patsec, struct service_t *services, int nservices);
 int copy_section(uint8_t* tsbuf, struct section_t* section, int pid);
 int write_section(int fd, struct section_t* section, int pid);

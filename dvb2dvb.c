@@ -43,6 +43,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #define PMT_FREQ_IN_BITS  MS_TO_BITS(200)
 #define SDT_FREQ_IN_BITS  MS_TO_BITS(1000)
 #define NIT_FREQ_IN_BITS  MS_TO_BITS(1000)
+#define AIT_FREQ_IN_BITS  MS_TO_BITS(500)
 
 static uint8_t null_packet[188] = {
   0x47, 0x1f, 0xff, 0x10, 0xff, 0xff, 0xff, 0xff,
@@ -217,6 +218,9 @@ int init_service(struct service_t* sv)
   // Create our new PMT section, removing unused streams and references to CA descriptors
   create_pmt(sv);
 
+  if (sv->ait_pid) {
+    create_ait(sv);
+  }
   return 0;  
 }
 
@@ -338,8 +342,15 @@ int main(int argc, char* argv[])
     for (j=0;j<8192;j++) { services[i].my_cc[j] = 0xff; }
     for (j=0;j<8192;j++) { services[i].curl_cc[j] = 0xff; }
 
+    /* Add hbbtv to first service */
+    if (i < 0) {
+      services[i].hbbtv.application_type = 0x0010;
+      services[i].hbbtv.AIT_version_number = 1;
+      services[i].hbbtv.url = "http://www.avalpa.com/assets/freesoft/HbbTv/";
+      services[i].hbbtv.initial_path = "index.php";
+    }
 
-    fprintf(stderr,"Creaeting thread %d\n",i);
+    fprintf(stderr,"Creating thread %d\n",i);
     int error = pthread_create(&services[i].curl_threadid,
                                NULL, /* default attributes please */
                                curl_thread,
@@ -392,6 +403,7 @@ int main(int argc, char* argv[])
   int64_t next_pmt_bitpos = 0;
   int64_t next_sdt_bitpos = 0;
   int64_t next_nit_bitpos = 0;
+  int64_t next_ait_bitpos = 0;
 
   // The main output loop.  We output one TS packet (either real or padding) in each iteration.
   int x = 1;
@@ -452,6 +464,7 @@ int main(int argc, char* argv[])
     if (next_pmt_bitpos <= next_bitpos) { next_psi = 2; next_bitpos = next_pmt_bitpos; }
     if (next_sdt_bitpos <= next_bitpos) { next_psi = 3; next_bitpos = next_sdt_bitpos; }
     if (next_nit_bitpos <= next_bitpos) { next_psi = 4; next_bitpos = next_nit_bitpos; }
+    if ((services[0].ait_pid) && (next_ait_bitpos <= next_bitpos)) { next_psi = 5; next_bitpos = next_ait_bitpos; } 
 
     /* Output NULL packets until we reach next_bitpos */
     while (next_bitpos > output_bitpos) {
@@ -500,6 +513,11 @@ int main(int argc, char* argv[])
       case 4: // NIT
         n = write_section(1, &nit, 0x10);
         next_nit_bitpos += NIT_FREQ_IN_BITS;
+        break;
+
+      case 5: // AIT
+        n = write_section(1, &services[0].ait, services[0].ait_pid);
+        next_ait_bitpos += AIT_FREQ_IN_BITS;
         break;
     }
     output_bitpos += n * 188*8;

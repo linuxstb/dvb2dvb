@@ -53,6 +53,14 @@ struct section_t
   int cc;
 };
 
+struct hbbtv_t
+{
+  char* url;
+  char* initial_path;
+  int application_type;
+  int AIT_version_number;
+};
+
 struct service_t
 {
   int id;
@@ -69,6 +77,7 @@ struct service_t
   int pmt_pid;
   int pcr_pid;
   int new_pmt_pid;           /* First PID used (for PMT) in output stream */
+  int ait_pid;
   uint16_t pid_map[8192];
   int64_t start_pcr;
   int64_t first_pcr;
@@ -89,6 +98,9 @@ struct service_t
   struct section_t next_pmt;
   struct section_t next_sdt;
   struct section_t next_eit;
+
+  struct hbbtv_t hbbtv;
+  struct section_t ait;
 
   struct section_t new_pmt;
 
