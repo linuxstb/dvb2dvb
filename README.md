@@ -65,7 +65,7 @@ the code is not stable or resilient to errors in the input streams.
 Usage
 =====
 
-./dvb2dvb url1 url2 url3 ... | sendts
+./dvb2dvb config.json | sendts
 
 The target bitrate is currently hardcoded near the top of dvb2dvb.c as
 follows:
@@ -108,5 +108,5 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 
-
-
+dvb2dvb includes json-parser from https://github.com/udp/json-parser -
+see the headers in json.[ch] for licensing information.

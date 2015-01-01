@@ -1,0 +1,52 @@
+{
+    "common": {
+        "bandwidth_hz": 8000,
+        "transmission_mode": "8K",
+        "constellation": "QAM_64",
+        "guard_interval": "1/32",
+        "code_rate_HP": "7/8",
+        "gain" : -6,
+        "onid": 9018,
+        "nid": 12339
+    },
+    "muxes": [
+        {
+            "device": "/dev/dvbmod0",
+            "frequency_khz": 802000,
+            "tsid": 57005,
+            "services": [
+                {
+                    "comment": "This is ignored by dvb2dvb",
+                    "url": "http://localhost:9981/stream/channelnumber/301",
+                    "lcn": 90,
+                    "service_id": 60000,
+                    "hbbtv": {
+                        "url": "http://www.example.com/hbbtv/"
+                    }
+                },
+                {
+                    "comment": "This is ignored by dvb2dvb",
+                    "url": "http://localhost:9981/stream/channelnumber/302",
+                    "lcn": 91,
+                    "service_id": 60001,
+                    "hbbtv": {
+                        "url": "http://www.example.com/hbbtv/"
+                    }
+                }
+            ]
+        },
+        {
+            "device": "/dev/dvbmod1",
+            "frequency_khz": 810000,
+            "tsid": 57006,
+            "services": [
+                {
+                    "comment": "This is ignored by dvb2dvb",
+                    "url": "http://localhost:9981/stream/channelnumber/303",
+                    "lcn": 92,
+                    "service_id": 60002
+                }
+            ]
+        }
+    ]
+}

@@ -26,6 +26,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <stdint.h>
 #include <pthread.h>
 #include "ringbuffer.h"
+#include "dvbmod.h"
 
 // TSID is arbitrary, NID is UK Freeview
 #define NEW_TSID 0xdead
@@ -109,5 +110,22 @@ struct service_t
 
   struct ringbuffer_t inbuf;  /* Input ringbuffer for curl requests */
 };
+
+struct mux_t
+{
+  struct dvb_modulator_parameters dvbmod_params;
+  int gain;
+  int tsid;
+  int onid;
+  int nid;
+
+  struct section_t pat;
+  struct section_t sdt;
+  struct section_t nit;
+
+  int nservices;
+  struct service_t* services;  
+};
+
 
 #endif

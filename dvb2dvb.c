@@ -26,6 +26,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <curl/curl.h>
 
@@ -33,6 +34,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "psi_read.h"
 #include "psi_create.h"
 #include "crc32.h"
+#include "parse_config.h"
 
 #define TARGET_BITRATE 31668318
 
@@ -124,7 +126,7 @@ curl_callback(void *contents, size_t size, size_t nmemb, void *userp)
     bytes_left -= needed;
     sv->curl_bytes = 0;
     p += needed;
-    check_cc("curl",sv->id, &sv->curl_cc[0], &sv->curl_buf[0]);
+    //check_cc("curl",sv->id, &sv->curl_cc[0], &sv->curl_buf[0]);
     needed = 188;
   }
   if (bytes_left) {
@@ -312,91 +314,63 @@ void sync_to_pcr(struct service_t* sv)
   }
 }
 
-int main(int argc, char* argv[])
+void mux_thread(struct mux_t* m) 
 {
-  struct service_t *services;
-  int nservices;
   int i,j;
-  int service_id = 60000; // TODO: Make configurable
-  int lcn = 91;          // TODO: Make configurable
-  struct section_t pat;
-  struct section_t sdt;
-  struct section_t nit;
 
-  if (argc < 2) {
-    fprintf(stderr,"Usage: dvb2dvb file1.ts file2.ts ...\n");
-    return 1;
-  }
-
-  /* Must initialize libcurl before any threads are started */
-  curl_global_init(CURL_GLOBAL_ALL);
-
-  nservices = argc-1;
-  services = calloc(nservices,sizeof(struct service_t));
-  for (i=0;i<nservices;i++) {
-    services[i].id = i;
-    services[i].url = strdup(argv[i+1]);
-    services[i].new_pmt_pid = (i+1)*100;
-    services[i].new_service_id = service_id++;
-    services[i].lcn = lcn++;
-    for (j=0;j<8192;j++) { services[i].my_cc[j] = 0xff; }
-    for (j=0;j<8192;j++) { services[i].curl_cc[j] = 0xff; }
-
-    /* Add hbbtv to first service */
-    if (i < 0) {
-      services[i].hbbtv.application_type = 0x0010;
-      services[i].hbbtv.AIT_version_number = 1;
-      services[i].hbbtv.url = "http://www.avalpa.com/assets/freesoft/HbbTv/";
-      services[i].hbbtv.initial_path = "index.php";
-    }
+  for (i=0;i<m->nservices;i++) {
+    m->services[i].id = i;
+    m->services[i].new_pmt_pid = (i+1)*100;
+    for (j=0;j<8192;j++) { m->services[i].my_cc[j] = 0xff; }
+    for (j=0;j<8192;j++) { m->services[i].curl_cc[j] = 0xff; }
 
     fprintf(stderr,"Creating thread %d\n",i);
-    int error = pthread_create(&services[i].curl_threadid,
+    int error = pthread_create(&m->services[i].curl_threadid,
                                NULL, /* default attributes please */
                                curl_thread,
-                               (void *)&services[i]);
+                               (void *)&m->services[i]);
 
     if (error)
       fprintf(stderr, "Couldn't run thread number %d, errno %d\n", i, error);
     else
-      fprintf(stderr, "Thread %d, gets %s\n", i, services[i].url);
+      fprintf(stderr, "Thread %d, gets %s\n", i, m->services[i].url);
   }
 
-  for (i=0;i<nservices;i++) {
-    int res = init_service(&services[i]);
+  for (i=0;i<m->nservices;i++) {
+    int res = init_service(&m->services[i]);
     if (res < 0) {
-      fprintf(stderr,"Error opening service %d (%s), aborting\n",i,services[i].url);
-      return 1;
+      fprintf(stderr,"Error opening service %d (%s), aborting\n",i,m->services[i].url);
+      return;
     }
 
-    dump_service(services,i);
+    dump_service(m->services,i);
   }
 
   int active_services = 0;
-  while (active_services < nservices) {
-    for (i=0;i<nservices;i++) {
-      if (services[i].status) { active_services++; }
+  while (active_services < m->nservices) {
+    for (i=0;i<m->nservices;i++) {
+      if (m->services[i].status) { active_services++; }
     }
     fprintf(stderr,"Waiting for services - %d started\r",active_services);
   }
 
-  for (i=0;i<nservices;i++) {
-    int to_skip = (rb_get_bytes_used(&services[i].inbuf)/188) * 188;
-    rb_skip(&services[i].inbuf, to_skip);
+  for (i=0;i<m->nservices;i++) {
+    int to_skip = (rb_get_bytes_used(&m->services[i].inbuf)/188) * 188;
+    rb_skip(&m->services[i].inbuf, to_skip);
     fprintf(stderr,"Skipped %d bytes from service %d\n",to_skip,i);
     // Reset CC counters
-    for (j=0;j<8192;j++) { services[i].my_cc[j] = 0xff; }
+    for (j=0;j<8192;j++) { m->services[i].my_cc[j] = 0xff; }
   }
 
-  for (i=0;i<nservices;i++) {
-    sync_to_pcr(&services[i]);
+  for (i=0;i<m->nservices;i++) {
+    sync_to_pcr(&m->services[i]);
   }
 
   //fprintf(stderr,"Creating PAT - nservices=%d\n",nservices);
 
-  create_pat(&pat, services, nservices);
-  create_sdt(&sdt, services, nservices);
-  create_nit(&nit, services, nservices);
+  create_pat(&m->pat, m->services, m->nservices);
+  create_sdt(&m->sdt, m->services, m->nservices);
+  create_nit(&m->nit, m->services, m->nservices);
 
   int64_t output_bitpos = 0;
   int64_t next_pat_bitpos = 0;
@@ -411,9 +385,9 @@ int main(int argc, char* argv[])
   int eit_cc = 0;
   while (1) {
     // Ensure we have enough data for every service.
-    for (i=0;i<nservices;i++) {
-      if (services[i].packets_in_buf-services[i].packets_written == 1) {  // Will contain a PCR.
-        struct service_t* sv = &services[i];
+    for (i=0;i<m->nservices;i++) {
+      if (m->services[i].packets_in_buf-m->services[i].packets_written == 1) {  // Will contain a PCR.
+        struct service_t* sv = &m->services[i];
 
         // Move last packet to start of buffer
         sv->first_pcr = sv->second_pcr;
@@ -438,10 +412,10 @@ int main(int argc, char* argv[])
     }
 
     // Find the service with the most urgent packet (i.e. earliest bitpos)
-    struct service_t* sv = &services[0];
-    for (i=1;i<nservices;i++) {
-      if (services[i].bitpos[services[i].packets_written] < sv->bitpos[sv->packets_written]) {
-        sv = &services[i];
+    struct service_t* sv = &m->services[0];
+    for (i=1;i<m->nservices;i++) {
+      if (m->services[i].bitpos[m->services[i].packets_written] < sv->bitpos[sv->packets_written]) {
+        sv = &m->services[i];
       }
     }
 
@@ -449,10 +423,10 @@ int main(int argc, char* argv[])
 
 #if 0
     fprintf(stderr,"output_bitpos  next_pat   next_pmt   next_sdt   next_nit");
-    for (i=0;i<nservices;i++) { fprintf(stderr,"  service_%d",i); }
+    for (i=0;i<m->nservices;i++) { fprintf(stderr,"  service_%d",i); }
     fprintf(stderr,"\n");
     fprintf(stderr,"%lld %lld %lld %lld %lld",output_bitpos,next_pat_bitpos,next_pmt_bitpos,next_sdt_bitpos,next_sdt_bitpos);
-    for (i=0;i<nservices;i++) { fprintf(stderr," %lld",services[i].bitpos[services[i].packets_written]); }
+    for (i=0;i<m->nservices;i++) { fprintf(stderr," %lld",m->services[i].bitpos[m->services[i].packets_written]); }
     fprintf(stderr,"\n");
 //    return 0;
 #endif
@@ -464,7 +438,7 @@ int main(int argc, char* argv[])
     if (next_pmt_bitpos <= next_bitpos) { next_psi = 2; next_bitpos = next_pmt_bitpos; }
     if (next_sdt_bitpos <= next_bitpos) { next_psi = 3; next_bitpos = next_sdt_bitpos; }
     if (next_nit_bitpos <= next_bitpos) { next_psi = 4; next_bitpos = next_nit_bitpos; }
-    if ((services[0].ait_pid) && (next_ait_bitpos <= next_bitpos)) { next_psi = 5; next_bitpos = next_ait_bitpos; } 
+    if ((m->services[0].ait_pid) && (next_ait_bitpos <= next_bitpos)) { next_psi = 5; next_bitpos = next_ait_bitpos; } 
 
     /* Output NULL packets until we reach next_bitpos */
     while (next_bitpos > output_bitpos) {
@@ -493,30 +467,30 @@ int main(int argc, char* argv[])
         break;
 
       case 1: // PAT
-        n = write_section(1, &pat, 0);
+        n = write_section(1, &m->pat, 0);
         next_pat_bitpos += PAT_FREQ_IN_BITS;
         break;
 
       case 2: // PMT
         n = 0;
-        for (i=0;i<nservices;i++) {
-          n += write_section(1,&services[i].new_pmt, services[i].new_pmt_pid);
+        for (i=0;i<m->nservices;i++) {
+          n += write_section(1,&m->services[i].new_pmt, m->services[i].new_pmt_pid);
         }
         next_pmt_bitpos += PMT_FREQ_IN_BITS;
         break;
 
       case 3: // SDT
-        n = write_section(1, &sdt, 0x11);
+        n = write_section(1, &m->sdt, 0x11);
         next_sdt_bitpos += SDT_FREQ_IN_BITS;
         break;
 
       case 4: // NIT
-        n = write_section(1, &nit, 0x10);
+        n = write_section(1, &m->nit, 0x10);
         next_nit_bitpos += NIT_FREQ_IN_BITS;
         break;
 
       case 5: // AIT
-        n = write_section(1, &services[0].ait, services[0].ait_pid);
+        n = write_section(1, &m->services[0].ait, m->services[0].ait_pid);
         next_ait_bitpos += AIT_FREQ_IN_BITS;
         break;
     }
@@ -524,13 +498,43 @@ int main(int argc, char* argv[])
 
     if (x==1000) {
       x = 0;
-      for (i=0;i<nservices;i++) {
-        fprintf(stderr,"%10d  ",rb_get_bytes_used(&services[i].inbuf));
+      for (i=0;i<m->nservices;i++) {
+        fprintf(stderr,"%10d  ",rb_get_bytes_used(&m->services[i].inbuf));
       }
       fprintf(stderr,"Average capacity used: %.3g%%\r",100.0*(double)(output_bitpos-padding_bits)/(double)output_bitpos);
     }
     x++;
   }
+}
+
+
+int main(int argc, char* argv[])
+{
+  int nmuxes;
+  struct mux_t *muxes;
+
+  if (argc != 2) {
+    fprintf(stderr,"Usage: dvb2dvb config.json\n");
+    return 1;
+  }
+
+  nmuxes = parse_config(argv[1],&muxes);
+
+  if (nmuxes < 0) {
+    fprintf(stderr,"[JSON] Error reading config file\n");
+    return 1;
+  }
+
+  if (nmuxes != 1) {
+    fprintf(stderr,"[JSON] Error - only 1 mux supported for now\n");
+    return 1;
+  }
+
+  /* Must initialize libcurl before any threads are started */
+  curl_global_init(CURL_GLOBAL_ALL);
+
+  /* Run the first mux only for now */
+  mux_thread(muxes);
 
   return 0;
 }
