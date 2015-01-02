@@ -58,34 +58,19 @@ Current status
 ==============
 
 dvb2dvb is still under development.  The basic functionality is
-working but the stream output parameters are not user-configurable and
-the code is not stable or resilient to errors in the input streams.
+working but not all the stream output parameters are user-configurable
+and the code is not stable or resilient to errors in the input
+streams.
 
 
 Usage
 =====
 
-./dvb2dvb config.json | sendts
+./dvb2dvb config.json
 
-The target bitrate is currently hardcoded near the top of dvb2dvb.c as
-follows:
-
-`#define TARGET_BITRATE 31668318`
-
-This must be the bitrate output by your version of sendts (which
-outputs the target bitrate based on the DVB-T parameters).  31668318
-(31.668Mbits/s) is the maximum possible with DVB-T.
-
-You can typically stream about 7 SD channels in this bitrate.  Note
-that undefined behaviour will happen if the total combined bitrate of
-the input streams exceed this rate at any time.
-
-The other values you may wish to change are the NEW_ONID and NEW_TSID
-values in dvb2dvb.h, the start values for the new service IDs and LCNs
-in dvb2dvb.c:main(), and the values written in the
-terrestrial_delivery_descriptor in create_psi.c:create_nit().
-
-These values will all be user-configurable in the future.
+See example.json for an example configuration file.  Note that dvb2dvb
+currently only supports one output mux, although the config file
+format allows for more. (This feature will be added in the near future).
 
 
 Copyright/Licence

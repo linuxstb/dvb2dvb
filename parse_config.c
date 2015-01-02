@@ -19,7 +19,9 @@ static int parse_mux_params(struct mux_t *mux, json_value *json)
   }
 
   for (i=0;i<(int)json->u.object.length;i++) {
-    if (!strcmp(json->u.object.values[i].name,"frequency_khz"))
+    if (!strcmp(json->u.object.values[i].name,"device"))
+      mux->device = strdup(json->u.object.values[i].value->u.string.ptr);
+    else if (!strcmp(json->u.object.values[i].name,"frequency_khz"))
       mux->dvbmod_params.frequency_khz = json->u.object.values[i].value->u.integer;
     else if (!strcmp(json->u.object.values[i].name,"bandwidth_hz"))
       mux->dvbmod_params.bandwidth_hz = json->u.object.values[i].value->u.integer;
@@ -78,18 +80,17 @@ static int parse_mux_params(struct mux_t *mux, json_value *json)
   return 0;
 }
 
-
-//  nmuxes = parse_config(argv[1],&muxes);
 int parse_config(char* filename, struct mux_t **muxes_res)
 {
   int i,j;
-  struct mux_t mux_defaults;
+  struct mux_t *mux_defaults = NULL;
   struct mux_t *mux;
   int nmuxes;
   int service_id = 60000; // TODO: Make configurable
   int lcn = 91;          // TODO: Make configurable
 
   char jsonbuf[65536];  // TODO: Allocate dynamically
+
   int fd = open(filename,O_RDONLY);
   if (fd < 0) {
     fprintf(stderr,"Cannot read configuration file\n");
@@ -139,15 +140,19 @@ int parse_config(char* filename, struct mux_t **muxes_res)
   mux = *muxes_res;
 
   /* Process the common parameters */
-  memset(&mux_defaults, 0, sizeof(mux_defaults));
-  if (parse_mux_params(&mux_defaults, common) < 0) {
-    fprintf(stderr,"Error parsing common section\n");
-    return -8;
+  if (common) {
+    mux_defaults = calloc(sizeof(struct mux_t), 1);
+
+    if (parse_mux_params(mux_defaults, common) < 0) {
+      fprintf(stderr,"Error parsing common section\n");
+      return -8;
+    }
   }
 
   for (j = 0; j < nmuxes; j++) {
-    /* Set mux to default values */
-    *mux = mux_defaults;
+    /* Set mux to default values, if any */
+    if (mux_defaults)
+      *mux = *mux_defaults;
 
     json_value* m = muxes->u.array.values[j];
     if (parse_mux_params(mux, m) < 0) {
@@ -170,6 +175,7 @@ int parse_config(char* filename, struct mux_t **muxes_res)
     fprintf(stderr,"Mux %d, found %d services\n",j,mux->nservices);
 
     mux->services = calloc(mux->nservices,sizeof(struct service_t));
+
     for (i=0;i<mux->nservices;i++) {
       json_value *s = services->u.array.values[i];
       if (s->type != json_object) {
@@ -197,6 +203,9 @@ int parse_config(char* filename, struct mux_t **muxes_res)
 
     mux++;
   }
+
+  if (mux_defaults)
+    free(mux_defaults);
 
   return nmuxes;
 }

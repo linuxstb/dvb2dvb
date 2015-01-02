@@ -20,7 +20,6 @@
 
 int rb_init(struct ringbuffer_t *rb)
 {
-  // TODO: Init mutexes
   rb->head = rb->buf;
   rb->tail = rb->buf;
   return 0;

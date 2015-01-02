@@ -25,6 +25,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -35,17 +36,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "psi_create.h"
 #include "crc32.h"
 #include "parse_config.h"
-
-#define TARGET_BITRATE 31668318
-
-// SI table frequencies, in bits based on above bitrate
-#define MS_TO_BITS(x)  ((int64_t)(((int64_t)TARGET_BITRATE * (int64_t)(x)) / 1000))
-
-#define PAT_FREQ_IN_BITS  MS_TO_BITS(200)
-#define PMT_FREQ_IN_BITS  MS_TO_BITS(200)
-#define SDT_FREQ_IN_BITS  MS_TO_BITS(1000)
-#define NIT_FREQ_IN_BITS  MS_TO_BITS(1000)
-#define AIT_FREQ_IN_BITS  MS_TO_BITS(500)
 
 static uint8_t null_packet[188] = {
   0x47, 0x1f, 0xff, 0x10, 0xff, 0xff, 0xff, 0xff,
@@ -314,9 +304,169 @@ void sync_to_pcr(struct service_t* sv)
   }
 }
 
-void mux_thread(struct mux_t* m) 
+/* Function based on code in the tsrfsend.c application by Avalpa
+   Digital Engineering srl */
+static int calc_channel_capacity(struct dvb_modulator_parameters *params)
 {
+  uint64_t channel_capacity;
+  int temp;
+
+  switch (params->constellation) {
+    case QPSK:
+      temp = 0;
+      break;
+    case QAM_16:
+      temp = 1;
+      break;
+    case QAM_64:
+      temp = 2;
+      break;
+    default:
+      fprintf(stderr,"Invalid constellation, aborting\n");
+      exit(1);
+  }
+  channel_capacity = params->bandwidth_hz * 1000;
+  channel_capacity = channel_capacity * ( temp * 2 + 2);
+
+  switch (params->guard_interval) {
+    case GUARD_INTERVAL_1_32:
+      channel_capacity = channel_capacity*32/33;
+      break;
+    case GUARD_INTERVAL_1_16:
+      channel_capacity = channel_capacity*16/17;
+      break;
+    case GUARD_INTERVAL_1_8:
+      channel_capacity = channel_capacity*8/9;
+      break;
+    case GUARD_INTERVAL_1_4:
+      channel_capacity = channel_capacity*4/5;
+      break;
+    default:
+      fprintf(stderr,"Invalid guard interval, aborting\n");
+      exit(1);
+  }
+  switch (params->code_rate_HP) {
+    case FEC_1_2:
+      channel_capacity = channel_capacity*1/2;
+      break;
+    case FEC_2_3:
+      channel_capacity = channel_capacity*2/3;
+      break;
+    case FEC_3_4:
+      channel_capacity = channel_capacity*3/4;
+      break;
+    case FEC_5_6:
+      channel_capacity = channel_capacity*5/6;
+      break;
+    case FEC_7_8:
+      channel_capacity = channel_capacity*7/8;
+      break;
+    default:
+      fprintf(stderr,"Invalid coderate, aborting\n");
+      exit(1);
+  }
+
+  return channel_capacity/544*423;
+}
+
+static void *output_thread(void* userp)
+{
+  struct mux_t *m = userp;
+  int mod_fd;
+  int result;
+  int channel_capacity;
+  int gain;
+
+  /* Open Device */
+  if ((mod_fd = open(m->device, O_RDWR)) < 0) {
+    fprintf(stderr,"Failed to open device.\n");
+    return;
+  }
+
+  m->dvbmod_params.cell_id = 0;
+  result = ioctl(mod_fd, DVBMOD_SET_PARAMETERS, &m->dvbmod_params);
+
+  struct dvb_modulator_gain_range gain_range;
+  gain_range.frequency_khz = m->dvbmod_params.frequency_khz;
+  result = ioctl(mod_fd, DVBMOD_GET_RF_GAIN_RANGE, &gain_range);
+  fprintf(stderr,"Gain range: %d to %d\n",gain_range.min_gain,gain_range.max_gain);
+
+  result = ioctl(mod_fd, DVBMOD_SET_RF_GAIN, &m->gain);
+  fprintf(stderr,"Gain set to %d\n",m->gain);
+
+  /* Wait for 4MB in the ringbuffer */
+  while (rb_get_bytes_used(&m->outbuf) < 4*1024*1024) {
+    usleep(50000);
+  }
+
+  /* The main transfer loop */
+  unsigned char buf[188*200];
+  int n;
+  unsigned long long bytes_sent = 0;
+  while(1) {
+    n = rb_read(&m->outbuf,buf,sizeof(buf));
+    if (n == 0) { break; }
+
+    int to_write = n;
+    int bytes_done = 0;
+    while (bytes_done < to_write) {
+      n = write(mod_fd,buf+bytes_done,to_write-bytes_done);
+      if (n == 0) {
+        /* This shouldn't happen */
+        fprintf(stderr,"Zero write\n");
+        usleep(500);
+      } else if (n <= 0) {
+	fprintf(stderr,"Write error %d: ",n);
+        perror("Write error: ");
+      } else {
+        //if (n < sizeof(buf)) { fprintf(stderr,"Short write - %d bytes\n",n); }
+        //fprintf(stderr,"Wrote %d\n",n);
+        bytes_sent += n;
+        bytes_done += n;
+        //fprintf(stderr,"Bytes sent: %llu\r",bytes_sent);
+      }
+    }
+  }  
+
+  close(mod_fd);
+  return;
+}
+
+static int ms_to_bits(int channel_capacity, int ms)
+{
+  return ((int64_t)(((int64_t)channel_capacity * (int64_t)(ms)) / 1000));
+}
+
+/* The main thread for each mux */
+static void *mux_thread(void* userp)
+{
+  struct mux_t *m = userp;
   int i,j;
+
+  /* Calculate target bitrate */
+  m->channel_capacity = calc_channel_capacity(&m->dvbmod_params);
+  fprintf(stderr,"Channel capacity = %dbps\n",m->channel_capacity);
+
+  // SI table frequencies, in bits based on above bitrate
+  m->pat_freq_in_bits = ms_to_bits(m->channel_capacity,200);
+  m->pmt_freq_in_bits = ms_to_bits(m->channel_capacity,200);
+  m->sdt_freq_in_bits = ms_to_bits(m->channel_capacity,1000);
+  m->nit_freq_in_bits = ms_to_bits(m->channel_capacity,1000);
+  m->ait_freq_in_bits = ms_to_bits(m->channel_capacity,500);
+
+  /* Initialise output ringbuffer */
+  rb_init(&m->outbuf);
+
+  /* Start output thread */
+  fprintf(stderr,"Creating output thread\n");
+  int error = pthread_create(&m->output_threadid,
+                             NULL, /* default attributes please */
+                             output_thread,
+                             (void *)m);
+  if (error) {
+    fprintf(stderr, "Couldn't create output thread - errno %d\n", error);
+    return;
+  }
 
   for (i=0;i<m->nservices;i++) {
     m->services[i].id = i;
@@ -405,7 +555,7 @@ void mux_thread(struct mux_t* m)
         // Now calculate the output position for each packet, in terms of total bits written so far.
         for (j=0;j<sv->packets_in_buf;j++) {
           int64_t  packet_pcr = sv->first_pcr + ((j * pcr_diff)/(npackets-1)) - sv->start_pcr;
-          sv->bitpos[j] = (packet_pcr * TARGET_BITRATE) / 27000000;
+          sv->bitpos[j] = (packet_pcr * m->channel_capacity) / 27000000;
           //fprintf(stderr, "Stream %d, packet %d, packet_pcr = %lld, bitpos %lld\n",i,j,packet_pcr,sv->bitpos[j]);
         }
       }
@@ -443,7 +593,7 @@ void mux_thread(struct mux_t* m)
     /* Output NULL packets until we reach next_bitpos */
     while (next_bitpos > output_bitpos) {
       //fprintf(stderr,"next_bitpos=%lld, output_bitpos=%lld            \n",next_bitpos,output_bitpos);
-      write(1, &null_packet, 188);
+      rb_write(&m->outbuf, null_packet, 188);
       padding_bits += 188*8;
       output_bitpos += 188*8;
     }
@@ -460,38 +610,38 @@ void mux_thread(struct mux_t* m)
           buf[3] = 0x10 | eit_cc;
           eit_cc = (eit_cc + 1) % 16;
         }
-        res = write(1, &sv->buf[188*sv->packets_written], 188);
+        res = rb_write(&m->outbuf, &sv->buf[188*sv->packets_written], 188);
         if (res != 188) { fprintf(stderr,"Write error - res=%d\n",res); }
         n = 1;
         sv->packets_written++;
         break;
 
       case 1: // PAT
-        n = write_section(1, &m->pat, 0);
-        next_pat_bitpos += PAT_FREQ_IN_BITS;
+        n = write_section(&m->outbuf, &m->pat, 0);
+        next_pat_bitpos += m->pat_freq_in_bits;
         break;
 
       case 2: // PMT
         n = 0;
         for (i=0;i<m->nservices;i++) {
-          n += write_section(1,&m->services[i].new_pmt, m->services[i].new_pmt_pid);
+          n += write_section(&m->outbuf,&m->services[i].new_pmt, m->services[i].new_pmt_pid);
         }
-        next_pmt_bitpos += PMT_FREQ_IN_BITS;
+        next_pmt_bitpos += m->pmt_freq_in_bits;
         break;
 
       case 3: // SDT
-        n = write_section(1, &m->sdt, 0x11);
-        next_sdt_bitpos += SDT_FREQ_IN_BITS;
+        n = write_section(&m->outbuf, &m->sdt, 0x11);
+        next_sdt_bitpos += m->sdt_freq_in_bits;
         break;
 
       case 4: // NIT
-        n = write_section(1, &m->nit, 0x10);
-        next_nit_bitpos += NIT_FREQ_IN_BITS;
+        n = write_section(&m->outbuf, &m->nit, 0x10);
+        next_nit_bitpos += m->nit_freq_in_bits;
         break;
 
       case 5: // AIT
-        n = write_section(1, &m->services[0].ait, m->services[0].ait_pid);
-        next_ait_bitpos += AIT_FREQ_IN_BITS;
+        n = write_section(&m->outbuf, &m->services[0].ait, m->services[0].ait_pid);
+        next_ait_bitpos += m->ait_freq_in_bits;
         break;
     }
     output_bitpos += n * 188*8;
@@ -501,12 +651,11 @@ void mux_thread(struct mux_t* m)
       for (i=0;i<m->nservices;i++) {
         fprintf(stderr,"%10d  ",rb_get_bytes_used(&m->services[i].inbuf));
       }
-      fprintf(stderr,"Average capacity used: %.3g%%\r",100.0*(double)(output_bitpos-padding_bits)/(double)output_bitpos);
+      fprintf(stderr,"Average capacity used: %.3g%%  Outbuf = %10d               \r",100.0*(double)(output_bitpos-padding_bits)/(double)output_bitpos,rb_get_bytes_used(&m->outbuf));
     }
     x++;
   }
 }
-
 
 int main(int argc, char* argv[])
 {
@@ -533,8 +682,19 @@ int main(int argc, char* argv[])
   /* Must initialize libcurl before any threads are started */
   curl_global_init(CURL_GLOBAL_ALL);
 
-  /* Run the first mux only for now */
-  mux_thread(muxes);
+  /* TODO: Do this for each mux */
 
+  fprintf(stderr,"Creating mux processing thread 0\n");
+  int error = pthread_create(&muxes[0].threadid,
+                             NULL, /* default attributes please */
+                             mux_thread,
+                             (void *)muxes);
+
+  fprintf(stderr,"Created mux thread - error=%d\n",error);
+  fprintf(stderr,"Waiting for mux thread to terminate...\n");
+  
+  pthread_join(muxes[0].threadid, NULL);
+
+  fprintf(stderr,"Mux thread terminated.\n");
   return 0;
 }

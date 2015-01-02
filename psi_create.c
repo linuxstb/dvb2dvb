@@ -25,6 +25,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <unistd.h>
 #include "dvb2dvb.h"
 #include "psi_create.h"
+#include "ringbuffer.h"
 #include "crc32.h"
 
 static void put_u16be(uint8_t *buf, uint16_t x)
@@ -633,7 +634,7 @@ int copy_section(uint8_t* tsbuf, struct section_t* section, int pid)
   return num_packets;
 }
 
-int write_section(int fd, struct section_t* section, int pid)
+int write_section(struct ringbuffer_t* rb, struct section_t* section, int pid)
 {
   int i;
   uint8_t *buf = &section->buf[0];
@@ -662,7 +663,7 @@ int write_section(int fd, struct section_t* section, int pid)
       memset(tsbuf+i+to_write,0xff,188-(i+to_write));
     }
 
-    write(fd, tsbuf, 188);
+    rb_write(rb, tsbuf, 188);
     bytes_written += to_write;
     n -= to_write;
     num_packets++;

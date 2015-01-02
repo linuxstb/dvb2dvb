@@ -113,11 +113,19 @@ struct service_t
 
 struct mux_t
 {
+  char* device;
   struct dvb_modulator_parameters dvbmod_params;
   int gain;
   int tsid;
   int onid;
   int nid;
+
+  int channel_capacity;
+  int pat_freq_in_bits;
+  int pmt_freq_in_bits;
+  int sdt_freq_in_bits;
+  int nit_freq_in_bits;
+  int ait_freq_in_bits;
 
   struct section_t pat;
   struct section_t sdt;
@@ -125,6 +133,11 @@ struct mux_t
 
   int nservices;
   struct service_t* services;  
+
+  pthread_t threadid;  /* Mux processing thread id */
+  pthread_t output_threadid;  /* Output thread id */
+
+  struct ringbuffer_t outbuf;  /* Output ringbuffer to write to modulator */
 };
 
 
