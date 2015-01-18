@@ -395,7 +395,7 @@ static void *output_thread(void* userp)
   fprintf(stderr,"Gain set to %d\n",m->gain);
 
   /* Wait for 4MB in the ringbuffer */
-  while (rb_get_bytes_used(&m->outbuf) < 4*1024*1024) {
+  while (rb_get_bytes_used(&m->outbuf) < 10*1024*1024) {
     usleep(50000);
   }
 
@@ -504,6 +504,8 @@ static void *mux_thread(void* userp)
     fprintf(stderr,"Waiting for services - %d started\r",active_services);
   }
 
+#if 0
+  /* Flush the input buffers */  
   for (i=0;i<m->nservices;i++) {
     int to_skip = (rb_get_bytes_used(&m->services[i].inbuf)/188) * 188;
     rb_skip(&m->services[i].inbuf, to_skip);
@@ -511,6 +513,7 @@ static void *mux_thread(void* userp)
     // Reset CC counters
     for (j=0;j<8192;j++) { m->services[i].my_cc[j] = 0xff; }
   }
+#endif
 
   for (i=0;i<m->nservices;i++) {
     sync_to_pcr(&m->services[i]);
