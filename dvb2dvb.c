@@ -150,7 +150,7 @@ static void *curl_thread(void* userp)
   curl_easy_setopt(curl, CURLOPT_URL, sv->url);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)sv);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/1.0");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "dvb2dvb/git-master");
   curl_easy_perform(curl); /* ignores error */
   curl_easy_cleanup(curl);
 
