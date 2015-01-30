@@ -142,7 +142,7 @@ int copy_eit_descriptors(uint8_t *dst, uint8_t *src, int len, int onid)
   return p - dst;
 }
 
-int rewrite_eit(struct section_t* new_eit, struct section_t* eit, int old_service_id, int new_service_id, int onid)
+int rewrite_eit(struct section_t* new_eit, struct section_t* eit, int old_service_id, int new_service_id, int onid, struct mux_t* mux)
 {
   uint8_t *buf = &eit->buf[0];
   uint8_t *newbuf = &new_eit->buf[0];
@@ -151,8 +151,8 @@ int rewrite_eit(struct section_t* new_eit, struct section_t* eit, int old_servic
   if (service_id == old_service_id) {
     memcpy(newbuf, buf, 14);
     put_u16be(newbuf+3,  new_service_id);
-    put_u16be(newbuf+8,  NEW_TSID);
-    put_u16be(newbuf+10, NEW_ONID);
+    put_u16be(newbuf+8,  mux->tsid);
+    put_u16be(newbuf+10, mux->onid);
 
     uint8_t *p = newbuf + 14;
     uint8_t *q = buf+14;
@@ -264,8 +264,9 @@ A UK Freeview NIT contains no network descriptors, and the following transport s
                        0010:  2e 75 6b 2f 31 0a 64 6d  6f 6c 2e 63 6f 2e 75 6b   .uk/1.dmol.co.uk
                        0020:  03   
 */
-void create_nit(struct section_t* nitsec, struct service_t* services, int nservices)
+void create_nit(struct section_t* nitsec, struct mux_t* mux)
 {
+  struct service_t* services = mux->services;
   uint8_t *nit = &nitsec->buf[0];
   uint8_t *p;
   int i,j;
@@ -277,7 +278,7 @@ void create_nit(struct section_t* nitsec, struct service_t* services, int nservi
 
   nit[0] = 0x40; // table_id
   // skip section_length - 2 bytes
-  put_u16be(nit+3,NEW_NID);
+  put_u16be(nit+3,mux->nid);
   nit[5] = 0xc0 | (version_number << 1) | current_next_indicator;
   nit[6] = 0x00;  // section_number
   nit[7] = 0x00;  // last_section_number
@@ -286,8 +287,8 @@ void create_nit(struct section_t* nitsec, struct service_t* services, int nservi
   i = 12;
 
   // Transport Stream loop - just one entry.
-  put_u16be(nit+i,NEW_TSID);
-  put_u16be(nit+i+2,NEW_ONID);
+  put_u16be(nit+i,mux->tsid);
+  put_u16be(nit+i+2,mux->onid);
   // nit+i+4,5 = transport_descriptors_length
 
   // Transport descriptors
@@ -295,12 +296,12 @@ void create_nit(struct section_t* nitsec, struct service_t* services, int nservi
 
   // service_list_descriptor
   p[0] = 0x41;
-  p[1] = nservices * 3;
-  for (j=0;j<nservices;j++) {
+  p[1] = mux->nservices * 3;
+  for (j=0;j<mux->nservices;j++) {
     put_u16be(p+2+3*j, services[j].new_service_id);
     p[2+3*j+2] = services[j].service_type;
   }
-  p += 2+nservices*3;
+  p += 2+mux->nservices*3;
 
   // terrestrial_delivery_descriptor
   int centre_frequency = 802000 * 100;
@@ -334,17 +335,17 @@ void create_nit(struct section_t* nitsec, struct service_t* services, int nservi
   // TV doesn't use the LCNs without it.
   p[0] = 0x5f;
   p[1] = 4;
-  put_u32be(p+2,NEW_ONID);
+  put_u32be(p+2,mux->onid);
   p += 6;
 
   // logical_channel_numbers descriptor
   p[0] = 0x83;
-  p[1] = nservices * 4;
-  for (j=0;j<nservices;j++) {
+  p[1] = mux->nservices * 4;
+  for (j=0;j<mux->nservices;j++) {
     put_u16be(p+2+4*j, services[j].new_service_id);
     put_u16be(p+2+4*j+2, 0xfc00 | services[j].lcn);
   }
-  p += 2+nservices*4;
+  p += 2+mux->nservices*4;
 
   // Back-fill transport_stream_loop_length
   put_u16be(nit+10, 0xf000 | (p - (nit+i+6) - 4));
@@ -364,8 +365,9 @@ void create_nit(struct section_t* nitsec, struct service_t* services, int nservi
 }
 
 
-void create_sdt(struct section_t* sdtsec, struct service_t* services, int nservices)
+void create_sdt(struct section_t* sdtsec, struct mux_t* mux)
 {
+  struct service_t *services = mux->services;
   uint8_t *sdt = &sdtsec->buf[0];
   int i,j,k;
 
@@ -376,15 +378,15 @@ void create_sdt(struct section_t* sdtsec, struct service_t* services, int nservi
 
   sdt[0] = 0x42; // table_id
   // skip section_length - 2 bytes
-  put_u16be(sdt+3,NEW_TSID);
+  put_u16be(sdt+3,mux->tsid);
   sdt[5] = 0xc0 | (version_number << 1) | current_next_indicator;
   sdt[6] = 0x00;  // section_number
   sdt[7] = 0x00;  // last_section_number
-  put_u16be(sdt+8,NEW_ONID);
+  put_u16be(sdt+8,mux->onid);
   sdt[10] = 0xff; // reserved
 
   i = 11;
-  for (k=0;k<nservices;k++) {
+  for (k=0;k<mux->nservices;k++) {
     uint8_t *buf = &services[k].sdt.buf[0];
     j = 11;
     while (j < services[k].sdt.length - 4) {
@@ -488,12 +490,13 @@ void create_pmt(struct service_t* sv)
   sv->new_pmt.length = i + 4;
 }
 
-void create_pat(struct section_t *patsec, struct service_t *services, int nservices)
+void create_pat(struct section_t *patsec, struct mux_t* mux)
 {
+  struct service_t *services = mux->services;
   uint8_t *pat = &patsec->buf[0];
   int i,j;
 
-  int section_length = 5 + (nservices * 4) + 4;
+  int section_length = 5 + (mux->nservices * 4) + 4;
   int version_number = 1;
   int current_next_indicator = 1;
 
@@ -501,13 +504,13 @@ void create_pat(struct section_t *patsec, struct service_t *services, int nservi
 
   pat[0]  = 0x00;  // table_id
   put_u16be(pat+1, 0x8000 | section_length);
-  put_u16be(pat+3, NEW_TSID);
+  put_u16be(pat+3, mux->tsid);
   pat[5] = 0xc0 | (version_number << 1) | current_next_indicator;
   pat[6] = 0x00;  // section_number
   pat[7] = 0x00;  // last_section_number
 
   i = 8;
-  for (j=0;j<nservices;j++) {
+  for (j=0;j<mux->nservices;j++) {
     put_u16be(pat+i,services[j].new_service_id); i += 2;
     put_u16be(pat+i,0xe000 | services[j].new_pmt_pid); i += 2;
   }

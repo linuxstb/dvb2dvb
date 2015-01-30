@@ -216,7 +216,7 @@ int init_service(struct service_t* sv)
   return 0;  
 }
 
-void read_to_next_pcr(struct service_t* sv)
+void read_to_next_pcr(struct mux_t* mux, struct service_t* sv)
 {
   int found = 0;
   uint8_t* buf = (uint8_t*)(&sv->buf) + 188 * sv->packets_in_buf;
@@ -249,7 +249,7 @@ void read_to_next_pcr(struct service_t* sv)
       process_section(&sv->next_eit,&sv->eit,buf,0x4e);  // EITpf, actual TS
       if (sv->eit.length) {
         struct section_t new_eit;
-        if (rewrite_eit(&new_eit, &sv->eit, sv->service_id, sv->new_service_id, sv->onid) == 0) {  // This is for this service
+        if (rewrite_eit(&new_eit, &sv->eit, sv->service_id, sv->new_service_id, sv->onid, mux) == 0) {  // This is for this service
           int npackets = copy_section(buf, &new_eit, 0x12);
           sv->packets_in_buf += npackets;
           buf += npackets * 188;
@@ -521,9 +521,9 @@ static void *mux_thread(void* userp)
 
   //fprintf(stderr,"Creating PAT - nservices=%d\n",nservices);
 
-  create_pat(&m->pat, m->services, m->nservices);
-  create_sdt(&m->sdt, m->services, m->nservices);
-  create_nit(&m->nit, m->services, m->nservices);
+  create_pat(&m->pat, m);
+  create_sdt(&m->sdt, m);
+  create_nit(&m->nit, m);
 
   int64_t output_bitpos = 0;
   int64_t next_pat_bitpos = 0;
@@ -548,7 +548,7 @@ static void *mux_thread(void* userp)
         sv->packets_written = 0;
         sv->packets_in_buf = 1;
 
-        read_to_next_pcr(sv);
+        read_to_next_pcr(m,sv);
 
         int64_t pcr_diff = sv->second_pcr - sv->first_pcr;
         int npackets = sv->packets_in_buf;

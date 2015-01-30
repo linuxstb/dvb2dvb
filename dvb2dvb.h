@@ -28,12 +28,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "ringbuffer.h"
 #include "dvbmod.h"
 
-// TSID is arbitrary, NID is UK Freeview
-#define NEW_TSID 0xdead
-#define NEW_ONID 0x233a
-#define NEW_NID  0x3033
-
-
 #ifndef MAX
 #define MAX(X,Y) ((X) > (Y) ? (X) : (Y))
 #endif
