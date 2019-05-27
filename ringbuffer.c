@@ -27,7 +27,10 @@ int rb_init(struct ringbuffer_t *rb)
 
 int rb_get_bytes_used(struct ringbuffer_t* rb)
 {
-  return((rb->tail - rb->head) % sizeof(rb->buf));
+  if (rb->tail >= rb->head)
+    return (rb->tail - rb->head);
+  else
+    return (rb->tail - rb->head) + sizeof(rb->buf);
 }
 
 int rb_read(struct ringbuffer_t *rb, uint8_t* buf, int count)
@@ -81,7 +84,7 @@ int rb_write(struct ringbuffer_t *rb, uint8_t* buf, int count)
 {
   int to_copy;
 
-  int bytes_used = (rb->tail - rb->head) % sizeof(rb->buf);
+  int bytes_used = rb_get_bytes_used(rb);
   //fprintf(stderr,"bytes_used = %d\n",bytes_used);
 
   if (bytes_used + count >= (int)sizeof(rb->buf)) {
